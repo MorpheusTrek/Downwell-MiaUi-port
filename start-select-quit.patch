@@ -1,0 +1,26 @@
+diff --git a/src/loop.c b/src/loop.c
+index 42ef176..9321798 100644
+--- a/src/loop.c
++++ b/src/loop.c
+@@ -1083,7 +1083,20 @@ int loop(CommandLineArgs args, const char *argv0) {
+                 shouldWindowClose = true;
+                 continue;
+             }
+-            
++
++            // Handheld convenience: hold Start + Select together to quit back to the frontend.
++            for (int gp = 0; gp < RunnerGamepad_getDeviceCount(runner->gamepads); gp++) {
++                if (RunnerGamepad_buttonCheck(runner->gamepads, gp, GP_SELECT) &&
++                    RunnerGamepad_buttonCheck(runner->gamepads, gp, GP_START)) {
++                    logInfo("Start + Select pressed, exiting\n");
++                    shouldWindowClose = true;
++                    break;
++                }
++            }
++            if (shouldWindowClose) {
++                continue;
++            }
++
+             if (RunnerKeyboard_checkPressed(runner->keyboard, VK_F8)) {
+                 bool isPaused = Runner_isPaused(runner);
+                 Runner_setPaused(runner, !isPaused);

@@ -1,0 +1,158 @@
+diff --git a/src/cli/args.c b/src/cli/args.c
+index 92eab79..bf8eafc 100644
+--- a/src/cli/args.c
++++ b/src/cli/args.c
+@@ -84,6 +84,7 @@ static void printUsage(const char *argv0) {
+         "    --os-type <os>                         - Set the reported OS type\n"
+         "    --window-size <dimentions>             - Set a custom window size\n"
+         "    --widescreen-hack <aspect ratio>       - Set a custom aspect ratio\n"
++        "    --gui-ratio <aspect ratio>             - Draw the GUI across the full screen at this aspect ratio (fixes Downwell's HUD)\n"
+         "    --profile-gml-scripts                  - Log which GML scripts are the heaviest in terms of time and executed instructions\n"
+         "    --save-folder <directory>              - Set the directory will save files will be stored\n"
+         "    --game-args <args>                     - Arguments to pass to the game\n"
+@@ -159,6 +160,7 @@ void parseCommandLineArgs(CommandLineArgs* args, int argc, char* argv[]) {
+         {"os-type", required_argument, nullptr, 'O'},
+         {"window-size", required_argument, nullptr, 'w'},
+         {"widescreen-hack", optional_argument, nullptr, 1000},
++        {"gui-ratio", optional_argument, nullptr, 1001},
+         {"profile-gml-scripts", required_argument, nullptr, 'q'},
+         {"save-folder", required_argument, nullptr, 'B'},
+         {"game-args", required_argument, nullptr, 'N'},
+@@ -520,6 +522,24 @@ void parseCommandLineArgs(CommandLineArgs* args, int argc, char* argv[]) {
+                 }
+                 break;
+             }
++            case 1001: {
++                if (optarg == nullptr) {
++                    args->guiAspect = 4.0f / 3.0f;
++                    break;
++                }
++                int aw = 0, ah = 0;
++                double ratio = 0.0;
++                char* endPtr;
++                if (sscanf(optarg, "%d:%d", &aw, &ah) == 2 && aw > 0 && ah > 0) {
++                    args->guiAspect = (float) aw / (float) ah;
++                } else if ((ratio = strtod(optarg, &endPtr)), *endPtr == '\0' && ratio > 0.0) {
++                    args->guiAspect = (float) ratio;
++                } else {
++                    logError("Invalid --gui-ratio value '%s' (expected W:H like 4:3, or a decimal like 1.3333)\n", optarg);
++                    exit(1);
++                }
++                break;
++            }
+             case 1003:
+                 args->disableLogColours = true;
+                 break;
+diff --git a/src/gl_common/gl_common.c b/src/gl_common/gl_common.c
+index fff546a..4f5b3ae 100644
+--- a/src/gl_common/gl_common.c
++++ b/src/gl_common/gl_common.c
+@@ -11,6 +11,8 @@
+ #include "default_font/default_font.h"
+ #include "vm_builtins.h"
+ 
++float g_guiAspect = 0.0f;
++
+ #ifdef PLATFORM_PS3
+ #include "ps3_textures.h"
+ #elif PLATFORM_VITA
+@@ -207,12 +209,38 @@ void GLCommon_beginGUI(
+     int32_t guiW, int32_t guiH, int32_t portX, int32_t portY, int32_t portW, int32_t portH
+ ) {
+     GLRenderer* gl = (GLRenderer*) renderer;
++    float virtualW = (float) guiW;
++    float virtualH = (float) guiH;
+     if (targetSurfaceId == RENDER_TARGET_HOST_FRAMEBUFFER) {
+         glBindFramebuffer(GL_FRAMEBUFFER, hostFramebuffer);
+-        int32_t sx, sy, ex, ey;
+-        GLCommon_computeLetterbox(guiW, guiH, portW, portH, &sx, &sy, &ex, &ey);
+-        glViewport(sx, sy, ex - sx, ey - sy);
+-        glScissor(sx, sy, ex - sx, ey - sy);
++        if (g_guiAspect > 0.0f) {
++            // Downwell fix: draw the GUI across the full port at the requested aspect ratio
++            // instead of letterboxing it to the game's narrow GUI size. The game's HUD is
++            // laid out outside the 160x284 GUI rect, so it must not be scissored away.
++            int32_t effW, effH;
++            if ((float) portW / (float) portH > g_guiAspect) {
++                effH = portH;
++                effW = (int32_t) ((float) portH * g_guiAspect);
++            } else {
++                effW = portW;
++                effH = (int32_t) ((float) portW / g_guiAspect);
++            }
++            int32_t sx = portX + (portW - effW) / 2;
++            int32_t sy = portY + (portH - effH) / 2;
++            glViewport(sx, sy, effW, effH);
++            glScissor(sx, sy, effW, effH);
++            virtualH = (float) guiH;
++            virtualW = virtualH * g_guiAspect;
++            if (virtualW < (float) guiW) {
++                virtualW = (float) guiW;
++                virtualH = virtualW / g_guiAspect;
++            }
++        } else {
++            int32_t sx, sy, ex, ey;
++            GLCommon_computeLetterbox(guiW, guiH, portW, portH, &sx, &sy, &ex, &ey);
++            glViewport(sx, sy, ex - sx, ey - sy);
++            glScissor(sx, sy, ex - sx, ey - sy);
++        }
+     } else {
+         require(targetSurfaceId >= 0 && (uint32_t) targetSurfaceId < gl->surfaceCount);
+         require(gl->surfaces[targetSurfaceId] != 0);
+@@ -237,7 +265,7 @@ void GLCommon_beginGUI(
+     camera->viewAngle = 0;
+ 
+     Matrix4f projectionMatrix;
+-    Matrix4f_Orthographic(&projectionMatrix, (float) guiW, (float) guiH, 32000.0, 0.0);
++    Matrix4f_Orthographic(&projectionMatrix, virtualW, virtualH, 32000.0, 0.0);
+ 
+     Matrix4f viewMatrix;
+     float x = (float) guiW * 0.5f;
+diff --git a/src/gl_common/gl_common.h b/src/gl_common/gl_common.h
+index 3b0ea16..ff4d74c 100644
+--- a/src/gl_common/gl_common.h
++++ b/src/gl_common/gl_common.h
+@@ -11,6 +11,9 @@
+ struct GLRenderer;
+ typedef struct GLRenderer GLRenderer;
+ 
++// Set from --gui-ratio; when > 0 the GUI is drawn across the full port at this aspect ratio.
++extern float g_guiAspect;
++
+ #if defined(__EMSCRIPTEN__) || defined(__ANDROID__) || defined(__SWITCH__)
+ #include <GLES3/gl3.h>
+ #elif PLATFORM_PS3
+diff --git a/src/loop.c b/src/loop.c
+index 42ef176..6020498 100644
+--- a/src/loop.c
++++ b/src/loop.c
+@@ -516,6 +516,7 @@ static void PreProcessedStuff_free(void) {
+ 
+ // ===[ MAIN ]===
+ int loop(CommandLineArgs args, const char *argv0) {
++    g_guiAspect = args.guiAspect;
+ #ifdef _WIN32
+     timeBeginPeriod(1);
+ #endif
+diff --git a/src/platformdefs.h b/src/platformdefs.h
+index 221170b..f0290b0 100644
+--- a/src/platformdefs.h
++++ b/src/platformdefs.h
+@@ -8,6 +8,9 @@
+ 
+ // ===[ COMMAND LINE ARGUMENTS ]===
+ 
++// Set from --gui-ratio; consumed by GLCommon_beginGUI.
++extern float g_guiAspect;
++
+ typedef struct { const char* name; YoYoOperatingSystem value; } OsTypeNameEntry;
+ 
+ static const OsTypeNameEntry OS_TYPE_NAMES[] = {
+@@ -121,6 +124,7 @@ typedef struct {
+     YoYoOperatingSystem osType;
+     int32_t windowWidth, windowHeight; // 0 = auto (gen8 default, or the console-native size for console os-types)
+     float widescreenAspect; // "widescreen hack" target aspect ratio (width/height), 0 = disabled
++    float guiAspect; // GUI aspect ratio override (width/height), 0 = disabled. Fixes Downwell's HUD clipping.
+     char** gameArgs; // stb_ds array of owned strings, gameArgs[0] = runner executable path
+     bool lazyRooms;
+     StringBooleanEntry* eagerRooms; // stb_ds string-keyed set of room names
