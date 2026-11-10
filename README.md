@@ -26,7 +26,7 @@ This build also adds a **Start + Select** hotkey: press both buttons together to
 
 1. Download Downwell release zip.
 2. Extract the zip into `PORTS/`.
-3. Copy your game files (`data.win` + ogg sound files) into `/PORTS/Downwell.pak/`.
+3. Copy all of your game files into `/PORTS/Downwell.pak/`. (You can skip the exe and dll files)
 4. In MiaUI run PORTS\Downwell.
 
 ## SD folder structure
@@ -38,6 +38,8 @@ Ports/
     butterscotch
     data.win              # Your own Downwell game data
 	*.ogg
+	*.dat
+	*.ini
 ```
 
 ## Build from source
